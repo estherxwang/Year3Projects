@@ -1,0 +1,147 @@
+---
+title: "Final-Part3-Code"
+output: pdf_document
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+library(tinytex)
+library(opendatatoronto)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(plyr)
+library(survey)
+library(olsrr)
+library(gridExtra)
+library(alluvial)
+library(extrafont)
+browse_portal()
+```
+
+```{r, include=FALSE}
+package <- show_package("5d58e89e-ae55-4188-9d28-5c8a815f84df")
+package
+
+data_id <-pull(
+  list_package_resources(package)[1,"id"],
+  id
+)
+list_package_resources(package)
+dataset <- get_resource(data_id)
+description <- dataset$IndicatorMetaData
+data_raw <- dataset$`RawData-Ref Period 2011`
+glimpse(data_raw)
+```
+
+```{r, echo=FALSE, include=FALSE}
+# rename all columns
+names(data_raw) <- unlist(data_raw[1,])
+data_raw <- data_raw[-1,]
+# filter data
+data_raw <- data_raw %>%
+filter(`Health Providers`>=1)
+# New variable
+data_raw <- data_raw %>% mutate(healthprovider_level=ifelse(`Health Providers`>10,"High","Low"))
+data_raw <- data_raw %>% mutate(nutrition_level=ifelse(`Student Nutrition`>100,"Normal","Low"))
+# Imporatnt variables
+data <- data_raw
+bc <- as.numeric(data$`Breast Cancer Screenings`)
+cc <- as.numeric(data$`Cervical Cancer Screenings`)
+hp <- as.numeric(data$`Health Providers`)
+pm <- as.numeric(data$`Premature Mortality`)
+dsi <- as.numeric(data$`DineSafe Inspections`)
+ff <- as.numeric(data$`Female Fertility`)
+sn <- as.numeric(data$`Student Nutrition`)
+ln <- as.factor(data$`nutrition_level`)
+hpl <- as.factor(data$`healthprovider_level`)
+
+```
+
+```{r}
+# Divide data into training and testing set
+sample_data <- sample.int(n = nrow(data), size = floor(.7*nrow(data)), replace = F)
+train <- data[sample_data, ]
+test  <- data[-sample_data, ]
+```
+
+```{r}
+# always look first at summaries of the variables
+summary(train)
+attach(train)
+summary <- tibble(Stat=c("Min","1st Q","Median","Mean","3rd Q","Max"),bc=summary(bc),cc=summary(cc),hp=summary(hp),pm=summary(pm),dsi=summary(dsi),ff=summary(ff),sn=summary(sn))
+knitr::kable(summary)
+```
+
+```{r}
+# correlation of important values
+cor(bc,cc)
+cor(bc,hp)
+cor(bc,pm)
+cor(bc,dsi)
+cor(bc,ff)
+cor(bc,sn)
+```
+
+```{r}
+# model
+attach(train)
+m1=lm(bc~cc+hp+pm+dsi+ff+sn)
+summary(m1)
+library(car)
+vif(m1)
+
+# stepwise selection
+library(MASS)
+stepAIC(lm(bc~cc+hp+pm+dsi+ff+sn), direction="both",k=2)
+```
+
+```{r}
+# reduced model
+attach(train)
+m2=lm(bc~cc+pm+ff)
+summary(m2)
+```
+
+```{r}
+plot(rstandard(m2)~fitted(m2), main="Residual Plot of Model", xlab="Fitted Values", ylab="Residuals")
+par(mfrow=c(2,2))
+plot(m2,1)
+plot(m2,2)
+plot(m2,3)
+plot(m2,4)
+
+```
+
+
+```{r}
+# let's fit the same 3 predictor model but using the test data
+attach(test)
+m3=lm(`Breast Cancer Screenings` ~ `Cervical Cancer Screenings`+`Female Fertility`+`Premature Mortality`)
+summary(m3)
+
+# plot y versus yhat (Conditional 1)
+plot(lm(train$`Breast Cancer Screenings`) ~ fitted(m3), xlab="Fitted Values", ylab="bsc",main="yhat VS y")
+abline(a = 0, b = 1)
+
+# pairs plot  (Conditional 2)
+pairs(data[,c(1,3,4)])
+
+# determine whether there are leverage points
+h <- hatvalues(m2)
+threshold <- 2 * (length(m2$coefficients)/nrow(train))
+w <- which(h > threshold)
+train[w,]
+
+# find all influence functions
+D <- cooks.distance(m2)
+cutoff <- qf(0.5, length(m2$coefficients), nrow(train)-length(m2$coefficients), lower.tail=T)
+which(D > cutoff)
+fits <- dffits(m2)
+
+#find outlier
+r <- rstandard(m2)
+out <- which(r > 2 | r < -2)
+out
+```
+
